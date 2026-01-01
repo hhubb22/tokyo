@@ -142,7 +142,14 @@ func newDeleteCommand(cfg toolConfig) *cobra.Command {
 		Short: fmt.Sprintf("Delete a %s profile", cfg.DisplayName),
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return deleteProfile(cfg, args[0])
+			cleared, err := deleteProfile(cfg, args[0])
+			if err != nil {
+				return err
+			}
+			if cleared {
+				fmt.Fprintln(cmd.OutOrStdout(), "Deleted active profile; current profile is now <custom>.")
+			}
+			return nil
 		},
 	}
 }
@@ -197,6 +204,9 @@ func validateProfileName(profile string) error {
 	if strings.TrimSpace(profile) == "" {
 		return errors.New("profile name cannot be empty")
 	}
+	if strings.HasPrefix(profile, ".") {
+		return errors.New("profile name cannot start with '.'")
+	}
 	if filepath.Base(profile) != profile || strings.Contains(profile, string(os.PathSeparator)) {
 		return fmt.Errorf("invalid profile name: %q", profile)
 	}
@@ -239,17 +249,21 @@ func saveProfile(cfg toolConfig, profile string, force bool) error {
 		return err
 	}
 
-	if _, err := os.Stat(profileDir); err == nil {
-		if !force {
-			return fmt.Errorf("profile %q already exists (use --force to overwrite)", profile)
-		}
+	if force {
 		if err := os.RemoveAll(profileDir); err != nil {
 			return err
 		}
-	} else if !os.IsNotExist(err) {
-		return err
+	} else {
+		if err := os.MkdirAll(filepath.Dir(profileDir), 0o700); err != nil {
+			return err
+		}
+		if err := os.Mkdir(profileDir, 0o700); err != nil {
+			if os.IsExist(err) {
+				return fmt.Errorf("profile %q already exists (use --force to overwrite)", profile)
+			}
+			return err
+		}
 	}
-
 	if err := os.MkdirAll(profileDir, 0o700); err != nil {
 		return err
 	}
@@ -260,14 +274,11 @@ func saveProfile(cfg toolConfig, profile string, force bool) error {
 	}
 
 	for _, src := range configFiles {
-		if _, err := os.Stat(src); err != nil {
+		dst := filepath.Join(profileDir, filepath.Base(src))
+		if err := copyFile(src, dst); err != nil {
 			if os.IsNotExist(err) {
 				return fmt.Errorf("config file not found: %s", src)
 			}
-			return err
-		}
-		dst := filepath.Join(profileDir, filepath.Base(src))
-		if err := copyFile(src, dst); err != nil {
 			return err
 		}
 	}
@@ -275,24 +286,40 @@ func saveProfile(cfg toolConfig, profile string, force bool) error {
 	return nil
 }
 
-func deleteProfile(cfg toolConfig, profile string) error {
+func deleteProfile(cfg toolConfig, profile string) (bool, error) {
 	if err := validateProfileName(profile); err != nil {
-		return err
+		return false, err
 	}
 
 	profileDir, err := cfg.profileDir(profile)
 	if err != nil {
-		return err
+		return false, err
 	}
 
 	if _, err := os.Stat(profileDir); err != nil {
 		if os.IsNotExist(err) {
-			return fmt.Errorf("profile %q not found", profile)
+			return false, fmt.Errorf("profile %q not found", profile)
 		}
-		return err
+		return false, err
 	}
 
-	return os.RemoveAll(profileDir)
+	current, err := readCurrentProfile(cfg)
+	if err != nil {
+		return false, err
+	}
+	wasCurrent := current == profile
+
+	if err := os.RemoveAll(profileDir); err != nil {
+		return false, err
+	}
+
+	if wasCurrent {
+		if err := writeCurrentProfile(cfg, ""); err != nil {
+			return false, err
+		}
+	}
+
+	return wasCurrent, nil
 }
 
 func currentStatus(cfg toolConfig) (string, error) {
@@ -327,6 +354,13 @@ func switchProfile(cfg toolConfig, profile string) error {
 		return err
 	}
 
+	previousProfile := ""
+	previousProfileKnown := false
+	if current, err := readCurrentProfile(cfg); err == nil {
+		previousProfile = current
+		previousProfileKnown = true
+	}
+
 	profileDir, err := cfg.profileDir(profile)
 	if err != nil {
 		return err
@@ -340,10 +374,6 @@ func switchProfile(cfg toolConfig, profile string) error {
 
 	pairs, err := profilePairs(cfg, profileDir)
 	if err != nil {
-		return err
-	}
-
-	if err := ensureProfileFilesExist(pairs); err != nil {
 		return err
 	}
 
@@ -367,21 +397,21 @@ func switchProfile(cfg toolConfig, profile string) error {
 	for _, pair := range pairs {
 		stagePath := stageFiles[pair.dst]
 		if err := os.Rename(stagePath, pair.dst); err != nil {
-			rollbackErr := restoreRollback(rollbackEntries)
+			rollbackErr := rollbackSwitch(cfg, previousProfile, previousProfileKnown, rollbackEntries)
 			if rollbackErr != nil {
-				return fmt.Errorf("switch failed: %w (rollback failed: %v)", err, rollbackErr)
+				return errors.Join(fmt.Errorf("switch failed: %w", err), rollbackErr)
 			}
-			return err
+			return fmt.Errorf("switch failed: %w", err)
 		}
 		delete(stageFiles, pair.dst)
 	}
 
 	if err := writeCurrentProfile(cfg, profile); err != nil {
-		rollbackErr := restoreRollback(rollbackEntries)
+		rollbackErr := rollbackSwitch(cfg, previousProfile, previousProfileKnown, rollbackEntries)
 		if rollbackErr != nil {
-			return fmt.Errorf("switch failed: %w (rollback failed: %v)", err, rollbackErr)
+			return errors.Join(fmt.Errorf("switch failed: %w", err), rollbackErr)
 		}
-		return err
+		return fmt.Errorf("switch failed: %w", err)
 	}
 
 	return nil
@@ -458,18 +488,6 @@ func profilePairs(cfg toolConfig, profileDir string) ([]filePair, error) {
 	return pairs, nil
 }
 
-func ensureProfileFilesExist(pairs []filePair) error {
-	for _, pair := range pairs {
-		if _, err := os.Stat(pair.src); err != nil {
-			if os.IsNotExist(err) {
-				return fmt.Errorf("profile is missing file: %s", filepath.Base(pair.src))
-			}
-			return err
-		}
-	}
-	return nil
-}
-
 func stageProfileFiles(pairs []filePair) (map[string]string, error) {
 	stageFiles := make(map[string]string, len(pairs))
 	for _, pair := range pairs {
@@ -485,6 +503,9 @@ func stageProfileFiles(pairs []filePair) (map[string]string, error) {
 		if err := copyFileToFile(pair.src, tmpFile); err != nil {
 			os.Remove(tmpFile.Name())
 			cleanupStageFiles(stageFiles)
+			if os.IsNotExist(err) {
+				return nil, fmt.Errorf("profile is missing file: %s", filepath.Base(pair.src))
+			}
 			return nil, err
 		}
 		stageFiles[pair.dst] = tmpFile.Name()
@@ -529,19 +550,32 @@ func backupCurrentFiles(pairs []filePair, rollbackDir string) ([]rollbackEntry, 
 }
 
 func restoreRollback(entries []rollbackEntry) error {
-	var firstErr error
+	var errs []error
 	for _, entry := range entries {
 		if entry.existed {
-			if err := copyFile(entry.backup, entry.target); err != nil && firstErr == nil {
-				firstErr = err
+			if err := copyFile(entry.backup, entry.target); err != nil {
+				errs = append(errs, err)
 			}
 			continue
 		}
-		if err := os.Remove(entry.target); err != nil && !os.IsNotExist(err) && firstErr == nil {
-			firstErr = err
+		if err := os.Remove(entry.target); err != nil && !os.IsNotExist(err) {
+			errs = append(errs, err)
 		}
 	}
-	return firstErr
+	return errors.Join(errs...)
+}
+
+func rollbackSwitch(cfg toolConfig, previousProfile string, previousProfileKnown bool, entries []rollbackEntry) error {
+	var errs []error
+	if err := restoreRollback(entries); err != nil {
+		errs = append(errs, err)
+	}
+	if previousProfileKnown {
+		if err := writeCurrentProfile(cfg, previousProfile); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
 }
 
 func readCurrentProfile(cfg toolConfig) (string, error) {
@@ -565,13 +599,43 @@ func readCurrentProfile(cfg toolConfig) (string, error) {
 	return state.Profile, nil
 }
 
-func writeCurrentProfile(cfg toolConfig, profile string) error {
-	currentFile, err := cfg.currentFile()
-	if err != nil {
+func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
+	if err := ensureParentDir(path); err != nil {
+		return err
+	}
+	if err := rejectSymlink(path); err != nil {
 		return err
 	}
 
-	if err := ensureParentDir(currentFile); err != nil {
+	dir := filepath.Dir(path)
+	tmpFile, err := os.CreateTemp(dir, ".tokyo-")
+	if err != nil {
+		return err
+	}
+	tmpName := tmpFile.Name()
+	defer os.Remove(tmpName)
+
+	if _, err := tmpFile.Write(data); err != nil {
+		tmpFile.Close()
+		return err
+	}
+	if err := tmpFile.Sync(); err != nil {
+		tmpFile.Close()
+		return err
+	}
+	if err := tmpFile.Chmod(perm); err != nil {
+		tmpFile.Close()
+		return err
+	}
+	if err := tmpFile.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, path)
+}
+
+func writeCurrentProfile(cfg toolConfig, profile string) error {
+	currentFile, err := cfg.currentFile()
+	if err != nil {
 		return err
 	}
 
@@ -580,15 +644,52 @@ func writeCurrentProfile(cfg toolConfig, profile string) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(currentFile, data, 0o600)
+	return writeFileAtomic(currentFile, data, 0o600)
 }
 
 func ensureParentDir(path string) error {
 	return os.MkdirAll(filepath.Dir(path), 0o700)
 }
 
+func ensureRegularFile(path string) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("symlink not allowed: %s", path)
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("expected regular file: %s", path)
+	}
+	return nil
+}
+
+func rejectSymlink(path string) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("symlink not allowed: %s", path)
+	}
+	if info.IsDir() {
+		return fmt.Errorf("expected file but found directory: %s", path)
+	}
+	return nil
+}
+
 func copyFile(src, dst string) error {
+	if err := ensureRegularFile(src); err != nil {
+		return err
+	}
 	if err := ensureParentDir(dst); err != nil {
+		return err
+	}
+	if err := rejectSymlink(dst); err != nil {
 		return err
 	}
 	in, err := os.Open(src)
@@ -609,6 +710,10 @@ func copyFile(src, dst string) error {
 }
 
 func copyFileToFile(src string, dst *os.File) error {
+	if err := ensureRegularFile(src); err != nil {
+		dst.Close()
+		return err
+	}
 	in, err := os.Open(src)
 	if err != nil {
 		dst.Close()
@@ -628,6 +733,18 @@ func copyFileToFile(src string, dst *os.File) error {
 }
 
 func filesEqual(pathA, pathB string) (bool, error) {
+	infoA, err := os.Stat(pathA)
+	if err != nil {
+		return false, err
+	}
+	infoB, err := os.Stat(pathB)
+	if err != nil {
+		return false, err
+	}
+	if infoA.Size() != infoB.Size() {
+		return false, nil
+	}
+
 	hashA, err := fileHash(pathA)
 	if err != nil {
 		return false, err
