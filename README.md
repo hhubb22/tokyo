@@ -50,4 +50,5 @@ tokyo codex delete <profile>
 ## Notes
 
 - `current` prints `profile` or `profile (modified)`; `<custom>` means no matching profile.
-- `switch` uses a staging copy + rollback to keep configs consistent.
+- Managed config paths must be regular files (no symlinks).
+- `switch` is atomic per file and rolls back on runtime errors, but an unexpected interruption can leave a partial switch; re-run `switch` to restore consistency.

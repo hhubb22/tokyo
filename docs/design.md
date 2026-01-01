@@ -119,15 +119,18 @@ When running `tokyo claude current` or `tokyo codex current`, the output shows:
 ## Atomic Switch Flow
 
 1. Resolve the target profile directory and validate required files exist.
-2. Copy profile files into a temporary staging directory.
+2. Copy profile files into temporary staging files in the destination directories.
 3. Back up current config files to a rollback directory.
-4. Swap staged files into the live config location using atomic renames where possible.
+4. Swap staged files into each live config location using atomic renames.
 5. If any step fails, restore from the rollback directory and report an error.
 6. On success, update `current.json` and clean up temp/backup directories.
+
+Note: A multi-file switch cannot be globally atomic across all files. If the process is interrupted (e.g., crash, kill -9, power loss), configurations may be left in a partially switched state; rerun `switch` to restore consistency.
 
 ## Implementation Notes
 
 - `current.json` stores the last switched profile name for comparison
 - Profile detection: Compare current config files with saved profiles using file hashes or byte-for-byte equality
-- Switching should be atomic: stage changes in a temp directory, back up current config, and roll back if any copy fails
+- Switching should be failure-safe: stage changes in temp files, back up current config, and roll back if any rename fails
 - Each profile directory contains a complete copy of the tool's configuration files
+- Tokyo requires managed config paths to be regular files (no symlinks)

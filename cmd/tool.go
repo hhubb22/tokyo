@@ -35,6 +35,12 @@ type rollbackEntry struct {
 	existed bool
 }
 
+var (
+	errSymlinkNotAllowed   = errors.New("symlink not allowed")
+	errExpectedFileIsDir   = errors.New("expected file but found directory")
+	errExpectedRegularFile = errors.New("expected regular file")
+)
+
 func init() {
 	rootCmd.AddCommand(newToolCommand(claudeConfig()))
 	rootCmd.AddCommand(newToolCommand(codexConfig()))
@@ -253,6 +259,9 @@ func saveProfile(cfg toolConfig, profile string, force bool) error {
 		if err := os.RemoveAll(profileDir); err != nil {
 			return err
 		}
+		if err := os.MkdirAll(profileDir, 0o700); err != nil {
+			return err
+		}
 	} else {
 		if err := os.MkdirAll(filepath.Dir(profileDir), 0o700); err != nil {
 			return err
@@ -263,9 +272,6 @@ func saveProfile(cfg toolConfig, profile string, force bool) error {
 			}
 			return err
 		}
-	}
-	if err := os.MkdirAll(profileDir, 0o700); err != nil {
-		return err
 	}
 
 	configFiles, err := cfg.configFiles()
@@ -449,17 +455,18 @@ func profileMatches(cfg toolConfig, profile string) (bool, error) {
 	}
 
 	for _, pair := range pairs {
-		if _, err := os.Stat(pair.src); err != nil {
+		if err := ensureRegularFile(pair.src); err != nil {
 			if os.IsNotExist(err) {
 				return false, fmt.Errorf("profile is missing file: %s", filepath.Base(pair.src))
 			}
 			return false, err
 		}
-		if _, err := os.Stat(pair.dst); err != nil {
-			if os.IsNotExist(err) {
-				return false, nil
-			}
+		exists, err := ensureRegularFileIfExists(pair.dst)
+		if err != nil {
 			return false, err
+		}
+		if !exists {
+			return false, nil
 		}
 		same, err := filesEqual(pair.src, pair.dst)
 		if err != nil {
@@ -533,12 +540,13 @@ func createRollbackDir(cfg toolConfig) (string, error) {
 func backupCurrentFiles(pairs []filePair, rollbackDir string) ([]rollbackEntry, error) {
 	entries := make([]rollbackEntry, 0, len(pairs))
 	for _, pair := range pairs {
-		if _, err := os.Stat(pair.dst); err != nil {
-			if os.IsNotExist(err) {
-				entries = append(entries, rollbackEntry{target: pair.dst, existed: false})
-				continue
-			}
+		existed, err := ensureRegularFileIfExists(pair.dst)
+		if err != nil {
 			return nil, err
+		}
+		if !existed {
+			entries = append(entries, rollbackEntry{target: pair.dst, existed: false})
+			continue
 		}
 		backup := filepath.Join(rollbackDir, filepath.Base(pair.dst))
 		if err := copyFile(pair.dst, backup); err != nil {
@@ -603,7 +611,7 @@ func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
 	if err := ensureParentDir(path); err != nil {
 		return err
 	}
-	if err := rejectSymlink(path); err != nil {
+	if err := rejectNonRegularFile(path); err != nil {
 		return err
 	}
 
@@ -630,7 +638,16 @@ func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
 	if err := tmpFile.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmpName, path)
+	if err := os.Rename(tmpName, path); err != nil {
+		return err
+	}
+
+	// Verify the renamed file is a regular file to prevent TOCTOU attacks
+	if err := ensureRegularFile(path); err != nil {
+		os.Remove(path)
+		return fmt.Errorf("post-rename validation failed: %w", err)
+	}
+	return nil
 }
 
 func writeCurrentProfile(cfg toolConfig, profile string) error {
@@ -657,29 +674,40 @@ func ensureRegularFile(path string) error {
 		return err
 	}
 	if info.Mode()&os.ModeSymlink != 0 {
-		return fmt.Errorf("symlink not allowed: %s", path)
+		return fmt.Errorf("%w: %s", errSymlinkNotAllowed, path)
+	}
+	if info.IsDir() {
+		return fmt.Errorf("%w: %s", errExpectedFileIsDir, path)
 	}
 	if !info.Mode().IsRegular() {
-		return fmt.Errorf("expected regular file: %s", path)
+		return fmt.Errorf("%w: %s", errExpectedRegularFile, path)
 	}
 	return nil
 }
 
-func rejectSymlink(path string) error {
+func ensureRegularFileIfExists(path string) (bool, error) {
 	info, err := os.Lstat(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil
+			return false, nil
 		}
-		return err
+		return false, err
 	}
 	if info.Mode()&os.ModeSymlink != 0 {
-		return fmt.Errorf("symlink not allowed: %s", path)
+		return true, fmt.Errorf("%w: %s", errSymlinkNotAllowed, path)
 	}
 	if info.IsDir() {
-		return fmt.Errorf("expected file but found directory: %s", path)
+		return true, fmt.Errorf("%w: %s", errExpectedFileIsDir, path)
 	}
-	return nil
+	if !info.Mode().IsRegular() {
+		return true, fmt.Errorf("%w: %s", errExpectedRegularFile, path)
+	}
+	return true, nil
+}
+
+func rejectNonRegularFile(path string) error {
+	_, err := ensureRegularFileIfExists(path)
+	return err
 }
 
 func copyFile(src, dst string) error {
@@ -689,7 +717,7 @@ func copyFile(src, dst string) error {
 	if err := ensureParentDir(dst); err != nil {
 		return err
 	}
-	if err := rejectSymlink(dst); err != nil {
+	if err := rejectNonRegularFile(dst); err != nil {
 		return err
 	}
 	in, err := os.Open(src)
@@ -733,6 +761,13 @@ func copyFileToFile(src string, dst *os.File) error {
 }
 
 func filesEqual(pathA, pathB string) (bool, error) {
+	if err := ensureRegularFile(pathA); err != nil {
+		return false, err
+	}
+	if err := ensureRegularFile(pathB); err != nil {
+		return false, err
+	}
+
 	infoA, err := os.Stat(pathA)
 	if err != nil {
 		return false, err
