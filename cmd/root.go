@@ -9,9 +9,8 @@ import (
 
 var rootCmd = &cobra.Command{
 	Use:   "tokyo",
-	Short: "Tokyo - A CLI tool",
-	Long: `Tokyo is a CLI application built with Cobra.
-This application provides various commands to help you with your tasks.`,
+	Short: "Tokyo - Manage Claude Code and Codex configuration profiles",
+	Long: `Tokyo is a CLI tool for managing Claude Code and Codex configuration profiles.`,
 	Run: func(cmd *cobra.Command, args []string) {
 		// Show help if no subcommand is provided
 		cmd.Help()
