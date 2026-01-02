@@ -35,6 +35,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/{tool}/profiles", s.handleSave)
 	s.mux.HandleFunc("POST /api/{tool}/switch/{profile}", s.handleSwitch)
 	s.mux.HandleFunc("DELETE /api/{tool}/profiles/{profile}", s.handleDelete)
+	s.mux.Handle("/", staticHandler())
 }
 
 func (s *Server) getTool(r *http.Request) (profile.Tool, bool) {
