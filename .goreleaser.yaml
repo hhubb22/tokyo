@@ -1,0 +1,61 @@
+# yaml-language-server: $schema=https://goreleaser.com/static/schema.json
+version: 2
+
+before:
+  hooks:
+    - go mod tidy
+    - go test ./...
+
+builds:
+  - env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - windows
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+
+archives:
+  - formats: [tar.gz]
+    name_template: >-
+      {{ .ProjectName }}_
+      {{- title .Os }}_
+      {{- if eq .Arch "amd64" }}x86_64
+      {{- else if eq .Arch "386" }}i386
+      {{- else }}{{ .Arch }}{{ end }}
+      {{- if .Arm }}v{{ .Arm }}{{ end }}
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+
+checksum:
+  name_template: 'checksums.txt'
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+
+release:
+  footer: |
+    ## Installation
+
+    ### macOS / Linux
+    ```bash
+    # Download and extract (replace with your OS/arch)
+    curl -LO https://github.com/USER/tokyo/releases/download/{{ .Tag }}/tokyo_Darwin_arm64.tar.gz
+    tar xzf tokyo_Darwin_arm64.tar.gz
+    sudo mv tokyo /usr/local/bin/
+    ```
+
+    ### Go install
+    ```bash
+    go install github.com/USER/tokyo@{{ .Tag }}
+    ```
