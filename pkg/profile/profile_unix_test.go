@@ -1,6 +1,6 @@
 //go:build !windows
 
-package cmd
+package profile
 
 import (
 	"errors"
@@ -19,7 +19,6 @@ func TestWriteCurrentProfileRejectsNonRegularPaths(t *testing.T) {
 		{
 			name: "normal_write",
 			setup: func(t *testing.T, path, home string) {
-				// No setup - test normal write to non-existent file
 			},
 			wantErr: nil,
 		},
@@ -34,7 +33,7 @@ func TestWriteCurrentProfileRejectsNonRegularPaths(t *testing.T) {
 					t.Fatalf("symlink: %v", err)
 				}
 			},
-			wantErr: errSymlinkNotAllowed,
+			wantErr: ErrSymlinkNotAllowed,
 		},
 		{
 			name: "directory",
@@ -43,7 +42,7 @@ func TestWriteCurrentProfileRejectsNonRegularPaths(t *testing.T) {
 					t.Fatalf("mkdir: %v", err)
 				}
 			},
-			wantErr: errExpectedFileIsDir,
+			wantErr: ErrExpectedFileIsDir,
 		},
 		{
 			name: "fifo",
@@ -52,7 +51,7 @@ func TestWriteCurrentProfileRejectsNonRegularPaths(t *testing.T) {
 					t.Fatalf("mkfifo: %v", err)
 				}
 			},
-			wantErr: errExpectedRegularFile,
+			wantErr: ErrExpectedRegularFile,
 		},
 	}
 
@@ -61,8 +60,8 @@ func TestWriteCurrentProfileRejectsNonRegularPaths(t *testing.T) {
 			home := t.TempDir()
 			t.Setenv("HOME", home)
 
-			cfg := claudeConfig()
-			currentFile, err := cfg.currentFile()
+			tool := ClaudeTool()
+			currentFile, err := tool.currentFile()
 			if err != nil {
 				t.Fatalf("currentFile: %v", err)
 			}
@@ -72,7 +71,7 @@ func TestWriteCurrentProfileRejectsNonRegularPaths(t *testing.T) {
 
 			tc.setup(t, currentFile, home)
 
-			err = writeCurrentProfile(cfg, "work")
+			err = writeCurrentProfile(tool, "work")
 			if tc.wantErr == nil {
 				if err != nil {
 					t.Fatalf("expected success, got %v", err)
