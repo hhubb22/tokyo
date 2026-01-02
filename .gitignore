@@ -1,2 +1,6 @@
 # Build outputs
 /tokyo
+
+# Test coverage
+coverage.out
+coverage.html

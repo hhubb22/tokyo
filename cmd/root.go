@@ -17,8 +17,3 @@ var rootCmd = &cobra.Command{
 func Execute() error {
 	return rootCmd.Execute()
 }
-
-func init() {
-	// Add global flags here
-	// rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is $HOME/.tokyo.yaml)")
-}
