@@ -38,6 +38,22 @@ log_error() {
     echo -e "${RED}[ERROR]${NC} $1"
 }
 
+sha256_of() {
+    local file="$1"
+
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$file" | cut -d ' ' -f1
+        return 0
+    fi
+
+    if command -v shasum >/dev/null 2>&1; then
+        shasum -a 256 "$file" | cut -d ' ' -f1
+        return 0
+    fi
+
+    return 1
+}
+
 # Detect OS
 detect_os() {
     local os
@@ -117,7 +133,7 @@ install_tokyo() {
 
     # Create temp directory
     tmp_dir=$(mktemp -d)
-    trap "rm -rf $tmp_dir" EXIT
+    trap 'rm -rf "$tmp_dir"' EXIT
 
     # Download archive
     if ! curl -fsSL "$download_url" -o "${tmp_dir}/${archive_name}"; then
@@ -125,6 +141,36 @@ install_tokyo() {
         log_error "Please check if the version and platform are correct"
         exit 1
     fi
+
+    local checksums_url
+    local checksums_file
+    local expected_checksum
+    local actual_checksum
+
+    checksums_url="https://github.com/${REPO}/releases/download/${version}/checksums.txt"
+    checksums_file="${tmp_dir}/checksums.txt"
+
+    if ! curl -fsSL "$checksums_url" -o "$checksums_file"; then
+        log_error "Failed to download checksums.txt"
+        exit 1
+    fi
+
+    expected_checksum=$(grep -E " ${archive_name}$" "$checksums_file" | tr -s ' ' | cut -d ' ' -f1)
+    if [[ -z "$expected_checksum" ]]; then
+        log_error "Failed to find checksum for ${archive_name}"
+        exit 1
+    fi
+
+    actual_checksum=$(sha256_of "${tmp_dir}/${archive_name}") || {
+        log_error "sha256sum or shasum is required for checksum verification"
+        exit 1
+    }
+
+    if [[ "$expected_checksum" != "$actual_checksum" ]]; then
+        log_error "Checksum verification failed for ${archive_name}"
+        exit 1
+    fi
+    log_info "Checksum verified"
 
     # Extract archive
     log_info "Extracting archive..."

@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 
@@ -106,15 +107,14 @@ func (s *Server) handleSave(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := profile.Save(tool, req.Profile, req.Force); err != nil {
-		if strings.Contains(err.Error(), "already exists") {
+		switch {
+		case errors.Is(err, profile.ErrProfileAlreadyExists):
 			writeError(w, http.StatusConflict, err.Error())
-			return
-		}
-		if strings.Contains(err.Error(), "not found") {
+		case errors.Is(err, profile.ErrConfigFileNotFound):
 			writeError(w, http.StatusNotFound, err.Error())
-			return
+		default:
+			writeError(w, http.StatusInternalServerError, err.Error())
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -135,7 +135,7 @@ func (s *Server) handleSwitch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := profile.Switch(tool, profileName); err != nil {
-		if strings.Contains(err.Error(), "not found") {
+		if errors.Is(err, profile.ErrProfileNotFound) {
 			writeError(w, http.StatusNotFound, err.Error())
 			return
 		}
@@ -161,7 +161,7 @@ func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) {
 
 	cleared, err := profile.Delete(tool, profileName)
 	if err != nil {
-		if strings.Contains(err.Error(), "not found") {
+		if errors.Is(err, profile.ErrProfileNotFound) {
 			writeError(w, http.StatusNotFound, err.Error())
 			return
 		}

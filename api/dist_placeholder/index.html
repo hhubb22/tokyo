@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Tokyo</title>
+    <style>
+      :root { font-family: system-ui, -apple-system, sans-serif; line-height: 1.5; }
+      body { margin: 0; padding: 2rem; }
+      code { background: #f4f4f4; padding: 0.15rem 0.3rem; border-radius: 4px; }
+      pre { background: #f4f4f4; padding: 1rem; border-radius: 8px; overflow: auto; }
+      .box { max-width: 760px; margin: 0 auto; }
+    </style>
+  </head>
+  <body>
+    <div class="box">
+      <h1>Tokyo UI is not built</h1>
+      <p>
+        The server is running, but the embedded web UI assets were not built.
+      </p>
+      <p>Build them with:</p>
+      <pre><code>cd web
+npm ci
+npm run build</code></pre>
+      <p>
+        The UI build outputs to <code>api/dist</code> and will be embedded for releases.
+      </p>
+    </div>
+  </body>
+</html>

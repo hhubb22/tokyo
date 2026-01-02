@@ -8,27 +8,39 @@
   let newProfileName = '';
   let loading = false;
   let error = '';
+  let refreshSeq = 0;
 
   async function refresh() {
+    const seq = ++refreshSeq;
+    const selectedTool = tool;
+
     loading = true;
     error = '';
     try {
-      [profiles, current] = await Promise.all([
-        getProfiles(tool),
-        getCurrent(tool),
+      const [nextProfiles, nextCurrent] = await Promise.all([
+        getProfiles(selectedTool),
+        getCurrent(selectedTool),
       ]);
+
+      if (seq !== refreshSeq || selectedTool !== tool) return;
+      profiles = nextProfiles;
+      current = nextCurrent;
     } catch (e) {
+      if (seq !== refreshSeq) return;
       error = e instanceof Error ? e.message : 'Failed to load';
     } finally {
+      if (seq !== refreshSeq) return;
       loading = false;
     }
   }
 
   async function handleSwitch(profile: string) {
+    const selectedTool = tool;
+
     loading = true;
     error = '';
     try {
-      await switchProfile(tool, profile);
+      await switchProfile(selectedTool, profile);
       await refresh();
     } catch (e) {
       error = e instanceof Error ? e.message : 'Failed to switch';
@@ -39,10 +51,12 @@
 
   async function handleSave() {
     if (!newProfileName.trim()) return;
+    const selectedTool = tool;
+
     loading = true;
     error = '';
     try {
-      await saveProfile(tool, newProfileName.trim());
+      await saveProfile(selectedTool, newProfileName.trim());
       newProfileName = '';
       await refresh();
     } catch (e) {
@@ -54,10 +68,12 @@
 
   async function handleDelete(profile: string) {
     if (!confirm(`Delete profile "${profile}"?`)) return;
+    const selectedTool = tool;
+
     loading = true;
     error = '';
     try {
-      await deleteProfile(tool, profile);
+      await deleteProfile(selectedTool, profile);
       await refresh();
     } catch (e) {
       error = e instanceof Error ? e.message : 'Failed to delete';

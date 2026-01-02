@@ -1,8 +1,14 @@
 package cmd
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
 	"tokyo/api"
 
@@ -20,9 +26,39 @@ func newServeCommand() *cobra.Command {
 		Use:   "serve",
 		Short: "Start the HTTP API server",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			server := api.NewServer()
+			h := api.NewServer()
+
+			srv := &http.Server{
+				Addr:              addr,
+				Handler:           h,
+				ReadHeaderTimeout: 5 * time.Second,
+				ReadTimeout:       15 * time.Second,
+				WriteTimeout:      30 * time.Second,
+				IdleTimeout:       60 * time.Second,
+			}
+
+			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
+			defer stop()
+
+			errCh := make(chan error, 1)
+			go func() {
+				errCh <- srv.ListenAndServe()
+			}()
+
 			fmt.Fprintf(cmd.OutOrStdout(), "Starting server on %s\n", addr)
-			return http.ListenAndServe(addr, server)
+
+			select {
+			case <-ctx.Done():
+				shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				_ = srv.Shutdown(shutdownCtx)
+				return nil
+			case err := <-errCh:
+				if err == nil || errors.Is(err, http.ErrServerClosed) {
+					return nil
+				}
+				return err
+			}
 		},
 	}
 

@@ -4,11 +4,15 @@ version: 2
 before:
   hooks:
     - go mod tidy
+    - npm ci --prefix web
+    - npm run build --prefix web
     - go test ./...
 
 builds:
   - env:
       - CGO_ENABLED=0
+    flags:
+      - -tags=embedui
     goos:
       - linux
       - windows

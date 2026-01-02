@@ -16,7 +16,29 @@ var (
 	ErrSymlinkNotAllowed   = errors.New("symlink not allowed")
 	ErrExpectedFileIsDir   = errors.New("expected file but found directory")
 	ErrExpectedRegularFile = errors.New("expected regular file")
+
+	ErrProfileAlreadyExists = errors.New("profile already exists")
+	ErrProfileNotFound      = errors.New("profile not found")
+	ErrConfigFileNotFound   = errors.New("config file not found")
+	ErrProfileMissingFile   = errors.New("profile is missing file")
 )
+
+type userError struct {
+	kind error
+	msg  string
+}
+
+func (e *userError) Error() string {
+	return e.msg
+}
+
+func (e *userError) Unwrap() error {
+	return e.kind
+}
+
+func newUserError(kind error, msg string) error {
+	return &userError{kind: kind, msg: msg}
+}
 
 type Tool struct {
 	Name           string
@@ -105,8 +127,22 @@ func (t Tool) currentFile() (string, error) {
 }
 
 func ValidateProfileName(profile string) error {
+	const maxLen = 64
+
 	if strings.TrimSpace(profile) == "" {
 		return errors.New("profile name cannot be empty")
+	}
+	if strings.TrimSpace(profile) != profile {
+		return errors.New("profile name cannot start or end with whitespace")
+	}
+	if len(profile) > maxLen {
+		return fmt.Errorf("profile name too long (max %d characters)", maxLen)
+	}
+	if profile == "<custom>" {
+		return errors.New("profile name is reserved")
+	}
+	if strings.HasSuffix(profile, " (modified)") {
+		return errors.New("profile name cannot end with ' (modified)'")
 	}
 	if strings.HasPrefix(profile, ".") {
 		return errors.New("profile name cannot start with '.'")
@@ -114,6 +150,17 @@ func ValidateProfileName(profile string) error {
 	if filepath.Base(profile) != profile || strings.Contains(profile, string(os.PathSeparator)) {
 		return fmt.Errorf("invalid profile name: %q", profile)
 	}
+
+	for _, r := range profile {
+		if r > 0x7f {
+			return fmt.Errorf("invalid profile name: %q (ASCII only)", profile)
+		}
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
+			continue
+		}
+		return fmt.Errorf("invalid profile name: %q (allowed: A-Z a-z 0-9 _ -)", profile)
+	}
+
 	return nil
 }
 
@@ -166,7 +213,7 @@ func Save(t Tool, profile string, force bool) error {
 		}
 		if err := os.Mkdir(profileDir, 0o700); err != nil {
 			if os.IsExist(err) {
-				return fmt.Errorf("profile %q already exists (use --force to overwrite)", profile)
+				return newUserError(ErrProfileAlreadyExists, fmt.Sprintf("profile %q already exists (use --force to overwrite)", profile))
 			}
 			return err
 		}
@@ -181,7 +228,7 @@ func Save(t Tool, profile string, force bool) error {
 		dst := filepath.Join(profileDir, filepath.Base(src))
 		if err := copyFile(src, dst); err != nil {
 			if os.IsNotExist(err) {
-				return fmt.Errorf("config file not found: %s", src)
+				return newUserError(ErrConfigFileNotFound, fmt.Sprintf("config file not found: %s", src))
 			}
 			return err
 		}
@@ -202,7 +249,7 @@ func Delete(t Tool, profile string) (cleared bool, err error) {
 
 	if _, err := os.Stat(profileDir); err != nil {
 		if os.IsNotExist(err) {
-			return false, fmt.Errorf("profile %q not found", profile)
+			return false, newUserError(ErrProfileNotFound, fmt.Sprintf("profile %q not found", profile))
 		}
 		return false, err
 	}
@@ -271,7 +318,7 @@ func Switch(t Tool, profile string) error {
 	}
 	if _, err := os.Stat(profileDir); err != nil {
 		if os.IsNotExist(err) {
-			return fmt.Errorf("profile %q not found", profile)
+			return newUserError(ErrProfileNotFound, fmt.Sprintf("profile %q not found", profile))
 		}
 		return err
 	}
@@ -355,7 +402,7 @@ func matches(t Tool, profile string) (bool, error) {
 	for _, pair := range pairs {
 		if err := ensureRegularFile(pair.src); err != nil {
 			if os.IsNotExist(err) {
-				return false, fmt.Errorf("profile is missing file: %s", filepath.Base(pair.src))
+				return false, newUserError(ErrProfileMissingFile, fmt.Sprintf("profile is missing file: %s", filepath.Base(pair.src)))
 			}
 			return false, err
 		}
@@ -409,7 +456,7 @@ func stageProfileFiles(pairs []filePair) (map[string]string, error) {
 			os.Remove(tmpFile.Name())
 			cleanupStageFiles(stageFiles)
 			if os.IsNotExist(err) {
-				return nil, fmt.Errorf("profile is missing file: %s", filepath.Base(pair.src))
+				return nil, newUserError(ErrProfileMissingFile, fmt.Sprintf("profile is missing file: %s", filepath.Base(pair.src)))
 			}
 			return nil, err
 		}

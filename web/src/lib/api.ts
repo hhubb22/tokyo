@@ -36,7 +36,7 @@ export async function saveProfile(tool: string, profile: string, force: boolean 
 }
 
 export async function switchProfile(tool: string, profile: string): Promise<void> {
-  const res = await fetch(`${BASE_URL}/${tool}/switch/${profile}`, {
+  const res = await fetch(`${BASE_URL}/${tool}/switch/${encodeURIComponent(profile)}`, {
     method: 'POST',
   });
   if (!res.ok) {
@@ -46,7 +46,7 @@ export async function switchProfile(tool: string, profile: string): Promise<void
 }
 
 export async function deleteProfile(tool: string, profile: string): Promise<boolean> {
-  const res = await fetch(`${BASE_URL}/${tool}/profiles/${profile}`, {
+  const res = await fetch(`${BASE_URL}/${tool}/profiles/${encodeURIComponent(profile)}`, {
     method: 'DELETE',
   });
   if (!res.ok) {

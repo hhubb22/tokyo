@@ -17,9 +17,14 @@ func TestValidateProfileName(t *testing.T) {
 	}{
 		{name: "empty", profile: "", wantErr: true},
 		{name: "spaces", profile: "   ", wantErr: true},
+		{name: "leading_trailing_whitespace", profile: " work ", wantErr: true},
 		{name: "dotfile", profile: ".work", wantErr: true},
 		{name: "path", profile: "a/b", wantErr: true},
+		{name: "internal_space", profile: "my profile", wantErr: true},
+		{name: "reserved_custom", profile: "<custom>", wantErr: true},
+		{name: "modified_suffix", profile: "work (modified)", wantErr: true},
 		{name: "ok", profile: "work", wantErr: false},
+		{name: "ok_with_hyphen", profile: "work-1", wantErr: false},
 	}
 
 	for _, tc := range cases {
